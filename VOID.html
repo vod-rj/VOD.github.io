@@ -2544,6 +2544,9 @@ function sniffType(url=''){
 async function play(ch){
   if(typeof ch==='string'){try{ch=JSON.parse(ch);}catch{return;}}
   V.curCh = ch;
+  // Pause hero video bg
+  const _heroVid=document.getElementById('hero-video-bg');
+  if(_heroVid) _heroVid.muted=true;
   // History
   addToHistory(ch);
   startWatchSession(ch);
@@ -2896,6 +2899,14 @@ function goPage(id,btn){
   if(id==='epg') renderEpg();
   if(id==='history') renderHistory();
   if(id==='collections') renderCollections();
+  // Sync mobile bottom nav
+  document.querySelectorAll('.mob-nav-item').forEach(b=>b.classList.remove('act'));
+  const mn=document.getElementById('mn-'+id);
+  if(mn) mn.classList.add('act');
+  const mq=document.getElementById('mob-q');
+  if(mq) mq.value=V.q||'';
+  // TV mode: re-focus grid after page change
+  if(TV.on) setTimeout(()=>{ TV.zone='grid'; tvFocusGrid(0); },300);
 }
 
 // ── SEARCH ──
@@ -3998,19 +4009,7 @@ function goPageMob(id, btn){
   closeMobileMenu();
 }
 
-// Patch goPage to also update bottom nav
-const _origGoPage=goPage;
-function goPage(id,btn){
-  _origGoPage(id,btn);
-  // Sync mobile nav
-  const mnId='mn-'+id;
-  document.querySelectorAll('.mob-nav-item').forEach(b=>b.classList.remove('act'));
-  const mn=document.getElementById(mnId);
-  if(mn) mn.classList.add('act');
-  // Sync mobile search
-  const mq=document.getElementById('mob-q');
-  if(mq) mq.value=V.q||'';
-}
+// [mobile nav sync merged into goPage above]
 
 // Swipe gestures for mobile
 (function setupSwipe(){
@@ -4177,12 +4176,7 @@ function adjustVolume(delta){
   if(bar) bar.style.width=pct+'%';
 }
 
-// Re-focus grid after page change in TV mode
-const _origGoPageOuter=goPage;
-function goPage(id,btn){
-  _origGoPageOuter(id,btn);
-  if(TV.on) setTimeout(()=>{ TV.zone='grid'; tvFocusGrid(0); },300);
-}
+// [TV mode grid focus merged into goPage above]
 
 
 // ══════════════════════════════════════════
@@ -4496,14 +4490,7 @@ function playHeroChannel(){
   if(_heroCh) play(_heroCh);
 }
 
-// Stop hero when player opens
-const _origPlayForHero=play;
-async function play(ch){
-  // Pause hero video while player is open
-  const heroV=document.getElementById('hero-video-bg');
-  if(heroV) heroV.muted=true;
-  await _origPlayForHero(ch);
-}
+// [hero video mute merged into play() above]
 
 // ── PICTURE-IN-PICTURE ──
 function togglePip(){
