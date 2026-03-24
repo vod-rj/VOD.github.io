@@ -620,6 +620,8 @@ background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 512 512' xmlns='htt
       <div class="dim-tabs">
         <button class="dtab act" onclick="setDim('genre',this)">📺 Gênero</button>
         <button class="dtab" onclick="setDim('country',this)">🌍 País</button>
+        <button class="dtab" onclick="setDim('region',this)">🗺️ Região</button>
+        <button class="dtab" onclick="setDim('continent',this)">🌐 Continente</button>
         <button class="dtab" onclick="setDim('language',this)">🗣️ Idioma</button>
         <button class="dtab" onclick="setDim('platform',this)">📱 Plataforma</button>
         <button class="dtab" onclick="setDim('quality',this)">✦ Qualidade</button>
@@ -766,6 +768,39 @@ background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 512 512' xmlns='htt
             <button class="vbtn vbtn-o" style="font-size:12px;padding:10px 14px;flex-shrink:0;border-color:rgba(255,69,58,.3);color:var(--magma)" onclick="clearCustomProxy()">✕</button>
           </div>
           <div id="proxy-status" style="margin-top:10px;font-size:11px;font-family:var(--mono);color:rgba(255,255,255,.25)"></div>
+        </div>
+      </div>
+
+      <!-- Countries browser -->
+      <div class="ab-grp">
+        <div class="ab-lbl">Adicionar por País / Região (IPTV-ORG)</div>
+        <div class="ab-card" style="padding:18px 20px">
+          <div style="font-size:11px;color:rgba(255,255,255,.28);margin-bottom:14px;line-height:1.7">
+            Clique num país ou região para carregar sua lista. Cada fonte é associada ao código do país — a contagem na Dimensão País será precisa.
+          </div>
+          <!-- Country search -->
+          <div class="sf" style="margin-bottom:14px">
+            <svg width="12" height="12" fill="none" stroke="rgba(255,255,255,.28)" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            <input id="ctry-q" type="text" placeholder="Buscar país…" oninput="filterCtryList(this.value)" style="font-size:12px">
+          </div>
+          <!-- Continent filter tabs -->
+          <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:14px" id="ctab-wrap">
+            <button class="dtab act" style="font-size:10px;padding:5px 12px" onclick="setCtab('all',this)">🌐 Todos</button>
+            <button class="dtab" style="font-size:10px;padding:5px 12px" onclick="setCtab('southam',this)">🌎 América do Sul</button>
+            <button class="dtab" style="font-size:10px;padding:5px 12px" onclick="setCtab('noram',this)">🌎 América do Norte</button>
+            <button class="dtab" style="font-size:10px;padding:5px 12px" onclick="setCtab('cenamer',this)">🌎 América Central</button>
+            <button class="dtab" style="font-size:10px;padding:5px 12px" onclick="setCtab('eur',this)">🌍 Europa</button>
+            <button class="dtab" style="font-size:10px;padding:5px 12px" onclick="setCtab('asia',this)">🌏 Ásia</button>
+            <button class="dtab" style="font-size:10px;padding:5px 12px" onclick="setCtab('afr',this)">🌍 África</button>
+            <button class="dtab" style="font-size:10px;padding:5px 12px" onclick="setCtab('oce',this)">🌏 Oceânia</button>
+            <button class="dtab" style="font-size:10px;padding:5px 12px" onclick="setCtab('mideast',this)">🌍 Oriente Médio</button>
+          </div>
+          <!-- Regions sub-section -->
+          <div style="font-size:9px;font-weight:800;letter-spacing:2px;text-transform:uppercase;color:rgba(255,255,255,.18);margin-bottom:8px">REGIÕES</div>
+          <div class="presets-wrap" id="regions-list" style="margin-bottom:16px"></div>
+          <!-- Countries grid -->
+          <div style="font-size:9px;font-weight:800;letter-spacing:2px;text-transform:uppercase;color:rgba(255,255,255,.18);margin-bottom:8px">PAÍSES</div>
+          <div class="presets-wrap" id="ctry-list"></div>
         </div>
       </div>
 
@@ -1354,10 +1389,14 @@ function platformOf(sourceName=''){
 }
 
 // ── M3U PARSER ──
-function parseM3U(txt, sourceName=''){
+function parseM3U(txt, sourceName='', sourceCountryCode=null){
   const lines=txt.split(/\r?\n/).map(l=>l.trim());
   const ch=[];let cur=null;
   const re=/(\w[\w-]*)="([^"]*)"/g;
+  // Pre-resolve source country once
+  const srcCountry=sourceCountryCode
+    ? COUNTRIES.find(c=>c.code===sourceCountryCode)||null
+    : null;
   for(const line of lines){
     if(line.startsWith('#EXTINF')){
       cur={};
@@ -1378,8 +1417,18 @@ function parseM3U(txt, sourceName=''){
       cur.source=sourceName;
     }else if(cur&&line&&!line.startsWith('#')){
       cur.url=line;
-      // enrich metadata
-      const country=countryOf(cur.name,cur.group,cur.tvgCountry||'');
+      // Country resolution: source URL code > tvg-country tag > NO keyword fallback
+      let country = srcCountry;
+      if(!country && cur.tvgCountry){
+        country = COUNTRIES.find(c=>
+          c.code.toLowerCase()===cur.tvgCountry.toLowerCase()||
+          c.name.toLowerCase()===cur.tvgCountry.toLowerCase()
+        )||null;
+      }
+      // Only do keyword matching for channels with no source country and no tvg-country
+      if(!country && !sourceCountryCode){
+        country = countryOf(cur.name, cur.group, '');
+      }
       const lang=langOf(cur.name,cur.group,country);
       const genre=genreOf(cur.name,cur.group);
       const quality=detectQuality(cur.name,cur.url);
@@ -1497,13 +1546,14 @@ async function loadSrc(url,name){
   try{
     const txt=await fetchM3U(url);
     setBar(60);
-    const channels=parseM3U(txt,name);
+    const {countryCode,regionCode}=extractSourceMeta(url);
+    const channels=parseM3U(txt,name,countryCode);
     setBar(90);
-    const src={id:Date.now(),name,url,color:PAL[pi++%PAL.length],channels,enabled:true};
+    const src={id:Date.now(),name,url,color:PAL[pi++%PAL.length],channels,enabled:true,countryCode,regionCode};
     const dup=V.sources.findIndex(s=>s.url===url);
-    if(dup>=0){V.sources[dup].channels=channels;V.sources[dup].enabled=true;}
+    if(dup>=0){V.sources[dup].channels=channels;V.sources[dup].enabled=true;V.sources[dup].countryCode=countryCode;V.sources[dup].regionCode=regionCode;}
     else V.sources.push(src);
-    rebuildUnified(true);   // new source → reset filters
+    rebuildUnified(true);
     toast('✦',name,`${channels.length.toLocaleString('pt-BR')} canais`);
     setTimeout(()=>setBar(0),500);
   }catch(e){setBar(0);toast('✕','Erro',e.message.slice(0,70));}
@@ -1542,6 +1592,24 @@ function gName(u){
   try{return new URL(u).hostname;}catch{return 'Playlist';}
 }
 function sp(url,name){document.getElementById('f-url').value=url;document.getElementById('f-name').value=name;}
+
+// ── SOURCE META FROM URL ──
+function extractSourceMeta(url){
+  // /countries/br.m3u  → countryCode='BR'
+  // /subdivisions/br-rj.m3u → countryCode='BR'
+  // /cities/brsao.m3u  → countryCode='BR' (first two letters)
+  // /regions/latam.m3u → regionCode='latam'
+  let countryCode=null, regionCode=null;
+  const m1=url.match(/\/countries\/([a-z]{2,3})\.m3u/i);
+  if(m1){countryCode=m1[1].toUpperCase();return{countryCode,regionCode};}
+  const m2=url.match(/\/subdivisions\/([a-z]{2})-/i);
+  if(m2){countryCode=m2[1].toUpperCase();return{countryCode,regionCode};}
+  const m3=url.match(/\/cities\/([a-z]{2})[a-z]+\.m3u/i);
+  if(m3){countryCode=m3[1].toUpperCase();return{countryCode,regionCode};}
+  const m4=url.match(/\/regions\/([a-z]+)\.m3u/i);
+  if(m4){regionCode=m4[1].toLowerCase();return{countryCode,regionCode};}
+  return{countryCode,regionCode};
+}
 
 // ── RENDER: HOME ──
 function renderHome(){
@@ -1739,10 +1807,98 @@ function cvTile(c,i){
   </div>`;
 }
 
+// ── REGION MAP (country code → region/continent) ──
+const REGION_MAP={
+  // South America
+  AR:'southam',BO:'southam',BR:'southam',CL:'southam',CO:'southam',EC:'southam',
+  GY:'southam',PE:'southam',PY:'southam',SR:'southam',UY:'southam',VE:'southam',
+  // Central America
+  BZ:'cenamer',CR:'cenamer',SV:'cenamer',GT:'cenamer',HN:'cenamer',MX:'noram',
+  NI:'cenamer',PA:'cenamer',
+  // Caribbean
+  AG:'carib',BB:'carib',BS:'carib',CU:'carib',DM:'carib',DO:'carib',GD:'carib',
+  HT:'carib',JM:'carib',KN:'carib',LC:'carib',TT:'carib',VC:'carib',
+  // North America
+  CA:'noram',US:'noram',
+  // Europe
+  AL:'eur',AD:'eur',AT:'eur',BY:'eur',BE:'eur',BA:'eur',BG:'eur',HR:'eur',
+  CY:'eur',CZ:'eur',DK:'eur',EE:'eur',FI:'eur',FR:'eur',DE:'eur',GR:'eur',
+  HU:'eur',IS:'eur',IE:'eur',IT:'eur',XK:'eur',LV:'eur',LI:'eur',LT:'eur',
+  LU:'eur',MK:'eur',MT:'eur',MD:'eur',MC:'eur',ME:'eur',NL:'eur',NO:'eur',
+  PL:'eur',PT:'eur',RO:'eur',RU:'eur',SM:'eur',RS:'eur',SK:'eur',SI:'eur',
+  ES:'eur',SE:'eur',CH:'eur',UA:'eur',GB:'eur',VA:'eur',
+  // Asia
+  AF:'asia',AM:'asia',AZ:'asia',BH:'mideast',BD:'asia',BN:'asia',BT:'asia',
+  CN:'asia',GE:'asia',IN:'asia',ID:'asia',IR:'mideast',IQ:'mideast',IL:'mideast',
+  JP:'asia',JO:'mideast',KZ:'asia',KW:'mideast',KG:'asia',LA:'asia',LB:'mideast',
+  MY:'asia',MV:'asia',MN:'asia',MM:'asia',NP:'asia',KP:'asia',OM:'mideast',
+  PK:'asia',PS:'mideast',PH:'asia',QA:'mideast',SA:'mideast',SG:'asia',KR:'asia',
+  LK:'asia',SY:'mideast',TW:'asia',TJ:'asia',TH:'asia',TL:'asia',TM:'asia',
+  AE:'mideast',UZ:'asia',VN:'asia',YE:'mideast',
+  // Africa
+  DZ:'afr',AO:'afr',BJ:'afr',BF:'afr',BI:'afr',CM:'afr',CV:'afr',CF:'afr',
+  TD:'afr',KM:'afr',CD:'afr',CG:'afr',CI:'afr',DJ:'afr',EG:'afr',GQ:'afr',
+  ER:'afr',ET:'afr',GA:'afr',GM:'afr',GH:'afr',GN:'afr',GW:'afr',KE:'afr',
+  LS:'afr',LR:'afr',LY:'afr',MG:'afr',MW:'afr',ML:'afr',MR:'afr',MU:'afr',
+  MA:'afr',MZ:'afr',NA:'afr',NE:'afr',NG:'afr',RW:'afr',ST:'afr',SN:'afr',
+  SL:'afr',SO:'afr',ZA:'afr',SS:'afr',SD:'afr',SZ:'afr',TZ:'afr',TG:'afr',
+  TN:'afr',UG:'afr',EH:'afr',ZM:'afr',ZW:'afr',
+  // Oceania
+  AU:'oce',FJ:'oce',KI:'oce',MH:'oce',FM:'oce',NR:'oce',NZ:'oce',PW:'oce',
+  PG:'oce',WS:'oce',SB:'oce',TO:'oce',TV:'oce',VU:'oce',
+};
+
+const REGION_LABELS={
+  southam:{name:'América do Sul',   icon:'🌎', color:'#30d158'},
+  noram:  {name:'América do Norte', icon:'🌎', color:'#0a84ff'},
+  cenamer:{name:'América Central',  icon:'🌎', color:'#4ecdc4'},
+  carib:  {name:'Caribe',           icon:'🌎', color:'#64d2ff'},
+  eur:    {name:'Europa',           icon:'🌍', color:'#bf5af2'},
+  asia:   {name:'Ásia',            icon:'🌏', color:'#ffd60a'},
+  afr:    {name:'África',           icon:'🌍', color:'#ff9f0a'},
+  oce:    {name:'Oceânia',          icon:'🌏', color:'#4ecdc4'},
+  mideast:{name:'Oriente Médio',    icon:'🌍', color:'#ff453a'},
+};
+
 // ── RENDER: DIMENSIONS (EXPLORE) ──
 const DIM_CONFIGS = {
   genre:    {label:'Gênero',    icon:'📺', build:(chs)=>groupBy(chs,c=>{const g=genreOf(c.name,c.group);return{key:g,...(GENRES[g]||GENRES.general)}})},
-  country:  {label:'País',      icon:'🌍', build:(chs)=>groupBy(chs,c=>{const co=c.meta?.country;return co?{key:co.code,icon:co.flag,label:co.name,color:'#3b82f6'}:null})},
+  country:  {label:'País',      icon:'🌍', build:(chs)=>{
+    // Only include channels that have an explicitly-assigned country (from source URL or tvg-country)
+    // Skip channels whose country was derived only from keyword matching on general sources
+    const activeSrcCodes=new Set(V.sources.filter(s=>s.enabled&&s.countryCode).map(s=>s.countryCode));
+    return groupBy(chs,c=>{
+      const co=c.meta?.country;
+      if(!co)return null;
+      // Mark if this country has an active dedicated source
+      const hasSrc=activeSrcCodes.has(co.code);
+      return{key:co.code,icon:co.flag,label:co.name,color:'#3b82f6',hasSrc};
+    });
+  }},
+  region:   {label:'Região',    icon:'🗺️', build:(chs)=>groupBy(chs,c=>{
+    const co=c.meta?.country;if(!co)return null;
+    const rk=REGION_MAP[co.code];if(!rk)return null;
+    const rl=REGION_LABELS[rk]||{name:rk,icon:'🌐',color:'#3a3a3a'};
+    return{key:rk,icon:rl.icon,label:rl.name,color:rl.color};
+  })},
+  continent:{label:'Continente',icon:'🌐', build:(chs)=>{
+    // Continents: Americas, Europe, Asia, Africa, Oceania, Middle East
+    const CM={southam:'americas',noram:'americas',cenamer:'americas',carib:'americas',
+               eur:'europe',asia:'asia',afr:'africa',oce:'oceania',mideast:'mideast'};
+    const CL={americas:{name:'Américas',icon:'🌎',color:'#30d158'},
+               europe:{name:'Europa',icon:'🌍',color:'#bf5af2'},
+               asia:{name:'Ásia',icon:'🌏',color:'#ffd60a'},
+               africa:{name:'África',icon:'🌍',color:'#ff9f0a'},
+               oceania:{name:'Oceânia',icon:'🌏',color:'#4ecdc4'},
+               mideast:{name:'Oriente Médio',icon:'🌍',color:'#ff453a'}};
+    return groupBy(chs,c=>{
+      const co=c.meta?.country;if(!co)return null;
+      const rk=REGION_MAP[co.code];if(!rk)return null;
+      const ck=CM[rk];if(!ck)return null;
+      const cl=CL[ck];if(!cl)return null;
+      return{key:ck,icon:cl.icon,label:cl.name,color:cl.color};
+    });
+  }},
   language: {label:'Idioma',    icon:'🗣️', build:(chs)=>groupBy(chs,c=>{const l=c.meta?.lang;return l?{key:l.code,icon:langFlag(l.code),label:l.name,color:'#30d158'}:null})},
   platform: {label:'Plataforma',icon:'📱', build:(chs)=>groupBy(chs,c=>{const p=platformOf(c.source||'');return p?{key:p,icon:platIcon(p),label:p,color:'#64d2ff'}:null})},
   quality:  {label:'Qualidade', icon:'✦', build:(chs)=>groupBy(chs,c=>{const q=c.meta?.quality||detectQuality(c.name,c.url);return q?{key:q,icon:q==='4K'?'✦✦':q==='FHD'?'◈':'◇',label:q,color:q==='4K'?'#bf5af2':q==='FHD'?'#30d158':'#64d2ff'}:null})},
@@ -1799,10 +1955,12 @@ function renderDim(dim){
   for(const g of groups){
     const pct=(g.channels.length/maxCnt*100).toFixed(1);
     const col=g.color||'#3a3a3a';
+    const srcBadge=g.hasSrc?`<span style="font-size:8px;font-weight:800;letter-spacing:1px;text-transform:uppercase;background:rgba(48,209,88,.15);color:var(--pulse);border:1px solid rgba(48,209,88,.2);padding:2px 6px;border-radius:4px;margin-top:2px;display:inline-block">● fonte ativa</span>`:'';
     html+=`<div class="dim-card" onclick="drillDim('${esc(g.key)}','${esc(g.label)}','${esc(g.icon)}')" style="background:linear-gradient(135deg,${col}18,var(--pit))">
       <div class="dc-ico">${g.icon}</div>
       <div class="dc-name">${esc(g.label)}</div>
       <div class="dc-cnt">${g.channels.length.toLocaleString('pt-BR')} canais</div>
+      ${srcBadge}
       <div class="dc-bar"><div class="dc-bar-f" style="width:${pct}%;background:${col}"></div></div>
     </div>`;
   }
@@ -1919,7 +2077,243 @@ function renderAbyssSources(){
     </div>`).join('');
 }
 
-// ── PAGINATION ──
+// ── COUNTRY BROWSER (SETTINGS) ──
+const IPTV_COUNTRIES=[
+  {code:'AF',name:'Afeganistão',flag:'🇦🇫',region:'asia'},
+  {code:'AL',name:'Albânia',flag:'🇦🇱',region:'eur'},
+  {code:'DZ',name:'Argélia',flag:'🇩🇿',region:'afr'},
+  {code:'AD',name:'Andorra',flag:'🇦🇩',region:'eur'},
+  {code:'AO',name:'Angola',flag:'🇦🇴',region:'afr'},
+  {code:'AR',name:'Argentina',flag:'🇦🇷',region:'southam'},
+  {code:'AM',name:'Armênia',flag:'🇦🇲',region:'asia'},
+  {code:'AU',name:'Austrália',flag:'🇦🇺',region:'oce'},
+  {code:'AT',name:'Áustria',flag:'🇦🇹',region:'eur'},
+  {code:'AZ',name:'Azerbaijão',flag:'🇦🇿',region:'asia'},
+  {code:'BH',name:'Bahrein',flag:'🇧🇭',region:'mideast'},
+  {code:'BD',name:'Bangladesh',flag:'🇧🇩',region:'asia'},
+  {code:'BE',name:'Bélgica',flag:'🇧🇪',region:'eur'},
+  {code:'BZ',name:'Belize',flag:'🇧🇿',region:'cenamer'},
+  {code:'BJ',name:'Benin',flag:'🇧🇯',region:'afr'},
+  {code:'BO',name:'Bolívia',flag:'🇧🇴',region:'southam'},
+  {code:'BA',name:'Bósnia',flag:'🇧🇦',region:'eur'},
+  {code:'BR',name:'Brasil',flag:'🇧🇷',region:'southam'},
+  {code:'BN',name:'Brunei',flag:'🇧🇳',region:'asia'},
+  {code:'BG',name:'Bulgária',flag:'🇧🇬',region:'eur'},
+  {code:'BF',name:'Burkina Faso',flag:'🇧🇫',region:'afr'},
+  {code:'KH',name:'Camboja',flag:'🇰🇭',region:'asia'},
+  {code:'CM',name:'Camarões',flag:'🇨🇲',region:'afr'},
+  {code:'CA',name:'Canadá',flag:'🇨🇦',region:'noram'},
+  {code:'TD',name:'Chade',flag:'🇹🇩',region:'afr'},
+  {code:'CL',name:'Chile',flag:'🇨🇱',region:'southam'},
+  {code:'CN',name:'China',flag:'🇨🇳',region:'asia'},
+  {code:'CO',name:'Colômbia',flag:'🇨🇴',region:'southam'},
+  {code:'KM',name:'Comores',flag:'🇰🇲',region:'afr'},
+  {code:'CR',name:'Costa Rica',flag:'🇨🇷',region:'cenamer'},
+  {code:'HR',name:'Croácia',flag:'🇭🇷',region:'eur'},
+  {code:'CU',name:'Cuba',flag:'🇨🇺',region:'carib'},
+  {code:'CY',name:'Chipre',flag:'🇨🇾',region:'eur'},
+  {code:'CZ',name:'Rep. Tcheca',flag:'🇨🇿',region:'eur'},
+  {code:'CD',name:'Congo RDC',flag:'🇨🇩',region:'afr'},
+  {code:'DK',name:'Dinamarca',flag:'🇩🇰',region:'eur'},
+  {code:'DJ',name:'Djibuti',flag:'🇩🇯',region:'afr'},
+  {code:'DO',name:'Rep. Dominicana',flag:'🇩🇴',region:'carib'},
+  {code:'EC',name:'Equador',flag:'🇪🇨',region:'southam'},
+  {code:'EG',name:'Egito',flag:'🇪🇬',region:'afr'},
+  {code:'SV',name:'El Salvador',flag:'🇸🇻',region:'cenamer'},
+  {code:'GQ',name:'Guiné Equatorial',flag:'🇬🇶',region:'afr'},
+  {code:'ER',name:'Eritreia',flag:'🇪🇷',region:'afr'},
+  {code:'EE',name:'Estônia',flag:'🇪🇪',region:'eur'},
+  {code:'ET',name:'Etiópia',flag:'🇪🇹',region:'afr'},
+  {code:'FI',name:'Finlândia',flag:'🇫🇮',region:'eur'},
+  {code:'FR',name:'França',flag:'🇫🇷',region:'eur'},
+  {code:'GM',name:'Gâmbia',flag:'🇬🇲',region:'afr'},
+  {code:'GE',name:'Geórgia',flag:'🇬🇪',region:'asia'},
+  {code:'DE',name:'Alemanha',flag:'🇩🇪',region:'eur'},
+  {code:'GH',name:'Gana',flag:'🇬🇭',region:'afr'},
+  {code:'GR',name:'Grécia',flag:'🇬🇷',region:'eur'},
+  {code:'GT',name:'Guatemala',flag:'🇬🇹',region:'cenamer'},
+  {code:'GN',name:'Guiné',flag:'🇬🇳',region:'afr'},
+  {code:'GY',name:'Guiana',flag:'🇬🇾',region:'southam'},
+  {code:'HT',name:'Haiti',flag:'🇭🇹',region:'carib'},
+  {code:'HN',name:'Honduras',flag:'🇭🇳',region:'cenamer'},
+  {code:'HK',name:'Hong Kong',flag:'🇭🇰',region:'asia'},
+  {code:'HU',name:'Hungria',flag:'🇭🇺',region:'eur'},
+  {code:'IS',name:'Islândia',flag:'🇮🇸',region:'eur'},
+  {code:'IN',name:'Índia',flag:'🇮🇳',region:'asia'},
+  {code:'ID',name:'Indonésia',flag:'🇮🇩',region:'asia'},
+  {code:'IR',name:'Irã',flag:'🇮🇷',region:'mideast'},
+  {code:'IQ',name:'Iraque',flag:'🇮🇶',region:'mideast'},
+  {code:'IE',name:'Irlanda',flag:'🇮🇪',region:'eur'},
+  {code:'IL',name:'Israel',flag:'🇮🇱',region:'mideast'},
+  {code:'IT',name:'Itália',flag:'🇮🇹',region:'eur'},
+  {code:'JM',name:'Jamaica',flag:'🇯🇲',region:'carib'},
+  {code:'JP',name:'Japão',flag:'🇯🇵',region:'asia'},
+  {code:'JO',name:'Jordânia',flag:'🇯🇴',region:'mideast'},
+  {code:'KZ',name:'Cazaquistão',flag:'🇰🇿',region:'asia'},
+  {code:'KE',name:'Quênia',flag:'🇰🇪',region:'afr'},
+  {code:'XK',name:'Kosovo',flag:'🇽🇰',region:'eur'},
+  {code:'KW',name:'Kuwait',flag:'🇰🇼',region:'mideast'},
+  {code:'KG',name:'Quirguistão',flag:'🇰🇬',region:'asia'},
+  {code:'LA',name:'Laos',flag:'🇱🇦',region:'asia'},
+  {code:'LV',name:'Letônia',flag:'🇱🇻',region:'eur'},
+  {code:'LB',name:'Líbano',flag:'🇱🇧',region:'mideast'},
+  {code:'LY',name:'Líbia',flag:'🇱🇾',region:'afr'},
+  {code:'LT',name:'Lituânia',flag:'🇱🇹',region:'eur'},
+  {code:'LU',name:'Luxemburgo',flag:'🇱🇺',region:'eur'},
+  {code:'MO',name:'Macau',flag:'🇲🇴',region:'asia'},
+  {code:'MG',name:'Madagascar',flag:'🇲🇬',region:'afr'},
+  {code:'MY',name:'Malásia',flag:'🇲🇾',region:'asia'},
+  {code:'MV',name:'Maldivas',flag:'🇲🇻',region:'asia'},
+  {code:'ML',name:'Mali',flag:'🇲🇱',region:'afr'},
+  {code:'MT',name:'Malta',flag:'🇲🇹',region:'eur'},
+  {code:'MR',name:'Mauritânia',flag:'🇲🇷',region:'afr'},
+  {code:'MU',name:'Maurício',flag:'🇲🇺',region:'afr'},
+  {code:'MX',name:'México',flag:'🇲🇽',region:'noram'},
+  {code:'MD',name:'Moldávia',flag:'🇲🇩',region:'eur'},
+  {code:'MC',name:'Mônaco',flag:'🇲🇨',region:'eur'},
+  {code:'MN',name:'Mongólia',flag:'🇲🇳',region:'asia'},
+  {code:'ME',name:'Montenegro',flag:'🇲🇪',region:'eur'},
+  {code:'MA',name:'Marrocos',flag:'🇲🇦',region:'afr'},
+  {code:'MZ',name:'Moçambique',flag:'🇲🇿',region:'afr'},
+  {code:'MM',name:'Mianmar',flag:'🇲🇲',region:'asia'},
+  {code:'NA',name:'Namíbia',flag:'🇳🇦',region:'afr'},
+  {code:'NP',name:'Nepal',flag:'🇳🇵',region:'asia'},
+  {code:'NL',name:'Países Baixos',flag:'🇳🇱',region:'eur'},
+  {code:'NZ',name:'Nova Zelândia',flag:'🇳🇿',region:'oce'},
+  {code:'NI',name:'Nicarágua',flag:'🇳🇮',region:'cenamer'},
+  {code:'NE',name:'Níger',flag:'🇳🇪',region:'afr'},
+  {code:'NG',name:'Nigéria',flag:'🇳🇬',region:'afr'},
+  {code:'KP',name:'Coreia do Norte',flag:'🇰🇵',region:'asia'},
+  {code:'MK',name:'Macedônia',flag:'🇲🇰',region:'eur'},
+  {code:'NO',name:'Noruega',flag:'🇳🇴',region:'eur'},
+  {code:'OM',name:'Omã',flag:'🇴🇲',region:'mideast'},
+  {code:'PK',name:'Paquistão',flag:'🇵🇰',region:'asia'},
+  {code:'PS',name:'Palestina',flag:'🇵🇸',region:'mideast'},
+  {code:'PA',name:'Panamá',flag:'🇵🇦',region:'cenamer'},
+  {code:'PG',name:'Papua Nova Guiné',flag:'🇵🇬',region:'oce'},
+  {code:'PY',name:'Paraguai',flag:'🇵🇾',region:'southam'},
+  {code:'PE',name:'Peru',flag:'🇵🇪',region:'southam'},
+  {code:'PH',name:'Filipinas',flag:'🇵🇭',region:'asia'},
+  {code:'PL',name:'Polônia',flag:'🇵🇱',region:'eur'},
+  {code:'PT',name:'Portugal',flag:'🇵🇹',region:'eur'},
+  {code:'PR',name:'Porto Rico',flag:'🇵🇷',region:'carib'},
+  {code:'QA',name:'Catar',flag:'🇶🇦',region:'mideast'},
+  {code:'CG',name:'Rep. do Congo',flag:'🇨🇬',region:'afr'},
+  {code:'RO',name:'Romênia',flag:'🇷🇴',region:'eur'},
+  {code:'RU',name:'Rússia',flag:'🇷🇺',region:'eur'},
+  {code:'RW',name:'Ruanda',flag:'🇷🇼',region:'afr'},
+  {code:'SA',name:'Arábia Saudita',flag:'🇸🇦',region:'mideast'},
+  {code:'SN',name:'Senegal',flag:'🇸🇳',region:'afr'},
+  {code:'RS',name:'Sérvia',flag:'🇷🇸',region:'eur'},
+  {code:'SG',name:'Singapura',flag:'🇸🇬',region:'asia'},
+  {code:'SK',name:'Eslováquia',flag:'🇸🇰',region:'eur'},
+  {code:'SI',name:'Eslovênia',flag:'🇸🇮',region:'eur'},
+  {code:'SO',name:'Somália',flag:'🇸🇴',region:'afr'},
+  {code:'ZA',name:'África do Sul',flag:'🇿🇦',region:'afr'},
+  {code:'KR',name:'Coreia do Sul',flag:'🇰🇷',region:'asia'},
+  {code:'ES',name:'Espanha',flag:'🇪🇸',region:'eur'},
+  {code:'LK',name:'Sri Lanka',flag:'🇱🇰',region:'asia'},
+  {code:'SD',name:'Sudão',flag:'🇸🇩',region:'afr'},
+  {code:'SR',name:'Suriname',flag:'🇸🇷',region:'southam'},
+  {code:'SE',name:'Suécia',flag:'🇸🇪',region:'eur'},
+  {code:'CH',name:'Suíça',flag:'🇨🇭',region:'eur'},
+  {code:'SY',name:'Síria',flag:'🇸🇾',region:'mideast'},
+  {code:'TW',name:'Taiwan',flag:'🇹🇼',region:'asia'},
+  {code:'TJ',name:'Tadjiquistão',flag:'🇹🇯',region:'asia'},
+  {code:'TZ',name:'Tanzânia',flag:'🇹🇿',region:'afr'},
+  {code:'TH',name:'Tailândia',flag:'🇹🇭',region:'asia'},
+  {code:'TG',name:'Togo',flag:'🇹🇬',region:'afr'},
+  {code:'TT',name:'Trinidad e Tobago',flag:'🇹🇹',region:'carib'},
+  {code:'TN',name:'Tunísia',flag:'🇹🇳',region:'afr'},
+  {code:'TR',name:'Turquia',flag:'🇹🇷',region:'asia'},
+  {code:'TM',name:'Turcomenistão',flag:'🇹🇲',region:'asia'},
+  {code:'UG',name:'Uganda',flag:'🇺🇬',region:'afr'},
+  {code:'UA',name:'Ucrânia',flag:'🇺🇦',region:'eur'},
+  {code:'AE',name:'Emirados Árabes',flag:'🇦🇪',region:'mideast'},
+  {code:'GB',name:'Reino Unido',flag:'🇬🇧',region:'eur'},
+  {code:'US',name:'EUA',flag:'🇺🇸',region:'noram'},
+  {code:'UY',name:'Uruguai',flag:'🇺🇾',region:'southam'},
+  {code:'UZ',name:'Uzbequistão',flag:'🇺🇿',region:'asia'},
+  {code:'VE',name:'Venezuela',flag:'🇻🇪',region:'southam'},
+  {code:'VN',name:'Vietnã',flag:'🇻🇳',region:'asia'},
+  {code:'YE',name:'Iêmen',flag:'🇾🇪',region:'mideast'},
+  {code:'ZW',name:'Zimbabwe',flag:'🇿🇼',region:'afr'},
+];
+
+const IPTV_REGIONS=[
+  {code:'southam', name:'América do Sul',   icon:'🌎', url:'https://iptv-org.github.io/iptv/regions/southam.m3u'},
+  {code:'noram',   name:'América do Norte', icon:'🌎', url:'https://iptv-org.github.io/iptv/regions/noram.m3u'},
+  {code:'cenamer', name:'América Central',  icon:'🌎', url:'https://iptv-org.github.io/iptv/regions/cenamer.m3u'},
+  {code:'carib',   name:'Caribe',           icon:'🌎', url:'https://iptv-org.github.io/iptv/regions/carib.m3u'},
+  {code:'latam',   name:'América Latina',   icon:'🌎', url:'https://iptv-org.github.io/iptv/regions/latam.m3u'},
+  {code:'eur',     name:'Europa',           icon:'🌍', url:'https://iptv-org.github.io/iptv/regions/eur.m3u'},
+  {code:'neu',     name:'Europa do Norte',  icon:'🌍', url:'https://iptv-org.github.io/iptv/regions/neu.m3u'},
+  {code:'wer',     name:'Europa Ocidental', icon:'🌍', url:'https://iptv-org.github.io/iptv/regions/wer.m3u'},
+  {code:'cee',     name:'Europa Central/Oriental', icon:'🌍', url:'https://iptv-org.github.io/iptv/regions/cee.m3u'},
+  {code:'asia',    name:'Ásia',            icon:'🌏', url:'https://iptv-org.github.io/iptv/regions/asia.m3u'},
+  {code:'eas',     name:'Ásia Oriental',   icon:'🌏', url:'https://iptv-org.github.io/iptv/regions/eas.m3u'},
+  {code:'sea',     name:'Sudeste Asiático', icon:'🌏', url:'https://iptv-org.github.io/iptv/regions/sea.m3u'},
+  {code:'sas',     name:'Sul da Ásia',     icon:'🌏', url:'https://iptv-org.github.io/iptv/regions/sas.m3u'},
+  {code:'cas',     name:'Ásia Central',    icon:'🌏', url:'https://iptv-org.github.io/iptv/regions/cas.m3u'},
+  {code:'afr',     name:'África',          icon:'🌍', url:'https://iptv-org.github.io/iptv/regions/afr.m3u'},
+  {code:'eaf',     name:'África Oriental', icon:'🌍', url:'https://iptv-org.github.io/iptv/regions/eaf.m3u'},
+  {code:'waf',     name:'África Ocidental',icon:'🌍', url:'https://iptv-org.github.io/iptv/regions/waf.m3u'},
+  {code:'saf',     name:'África Austral',  icon:'🌍', url:'https://iptv-org.github.io/iptv/regions/saf.m3u'},
+  {code:'oce',     name:'Oceânia',         icon:'🌏', url:'https://iptv-org.github.io/iptv/regions/oce.m3u'},
+  {code:'mideast', name:'Oriente Médio',   icon:'🌍', url:'https://iptv-org.github.io/iptv/regions/mideast.m3u'},
+  {code:'mena',    name:'Oriente Médio + Norte da África', icon:'🌍', url:'https://iptv-org.github.io/iptv/regions/mena.m3u'},
+  {code:'arab',    name:'Mundo Árabe',     icon:'🌍', url:'https://iptv-org.github.io/iptv/regions/arab.m3u'},
+  {code:'gcc',     name:'Conselho do Golfo', icon:'🌍', url:'https://iptv-org.github.io/iptv/regions/gcc.m3u'},
+  {code:'ww',      name:'Worldwide',       icon:'🌐', url:'https://iptv-org.github.io/iptv/regions/ww.m3u'},
+];
+
+let _ctabFilter='all', _ctryQ='';
+
+function renderCtryBrowser(){
+  renderCtryRegions();
+  renderCtryGrid();
+}
+
+function renderCtryRegions(){
+  const el=document.getElementById('regions-list');
+  if(!el)return;
+  const activeSrcUrls=new Set(V.sources.filter(s=>s.enabled).map(s=>s.url));
+  el.innerHTML=IPTV_REGIONS.map(r=>{
+    const active=activeSrcUrls.has(r.url);
+    const style=active?'background:rgba(48,209,88,.14);color:var(--pulse);border-color:rgba(48,209,88,.3)':'';
+    return`<button class="pvoid" style="${style}" onclick="quickAdd('${r.url}','${r.icon} ${r.name}')">${r.icon} ${r.name}${active?' ✓':''}</button>`;
+  }).join('');
+}
+
+function renderCtryGrid(){
+  const el=document.getElementById('ctry-list');
+  if(!el)return;
+  const activeSrcUrls=new Set(V.sources.filter(s=>s.enabled).map(s=>s.url));
+  const q=(_ctryQ||'').toLowerCase();
+  const filtered=IPTV_COUNTRIES.filter(c=>{
+    if(_ctabFilter!=='all'&&c.region!==_ctabFilter)return false;
+    if(q&&!c.name.toLowerCase().includes(q)&&!c.code.toLowerCase().includes(q))return false;
+    return true;
+  });
+  el.innerHTML=filtered.map(c=>{
+    const url=`https://iptv-org.github.io/iptv/countries/${c.code.toLowerCase()}.m3u`;
+    const active=activeSrcUrls.has(url);
+    const style=active?'background:rgba(48,209,88,.14);color:var(--pulse);border-color:rgba(48,209,88,.3)':'';
+    return`<button class="pvoid" style="${style}" onclick="quickAdd('${url}','${c.flag} ${c.name}')">${c.flag} ${c.name}${active?' ✓':''}</button>`;
+  }).join('');
+}
+
+function setCtab(region,btn){
+  _ctabFilter=region;
+  document.querySelectorAll('#ctab-wrap .dtab').forEach(b=>b.classList.remove('act'));
+  if(btn)btn.classList.add('act');
+  renderCtryGrid();
+}
+
+function filterCtryList(q){
+  _ctryQ=q;
+  renderCtryGrid();
+}
 function renderPag(id,cur,tp,total,cb){
   const el=document.getElementById(id);if(!el)return;
   if(tp<=1){el.style.display='none';return;}
